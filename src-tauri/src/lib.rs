@@ -1,3 +1,6 @@
+mod chat;
+
+use crate::chat::connect_to_twitch_chat;
 use lazy_static::lazy_static;
 use piper_rs::synth::PiperSpeechSynthesizer;
 use std::env;
@@ -5,18 +8,19 @@ use std::path::Path;
 use std::sync::Mutex;
 use tauri::path::BaseDirectory;
 use tauri::Manager;
-use tokio::net::TcpStream;
 use uuid::Uuid;
 
 struct AppState {
     synth: Option<PiperSpeechSynthesizer>,
-    chat_stream: Option<TcpStream>,
+    watched_username: String,
+    stream_chat: bool,
 }
 
 lazy_static! {
     static ref APP_STATE: Mutex<AppState> = Mutex::new(AppState {
         synth: None,
-        chat_stream: None,
+        watched_username: String::new(),
+        stream_chat: false,
     });
 }
 
