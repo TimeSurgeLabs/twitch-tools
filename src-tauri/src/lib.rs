@@ -5,14 +5,19 @@ use std::path::Path;
 use std::sync::Mutex;
 use tauri::path::BaseDirectory;
 use tauri::Manager;
+use tokio::net::TcpStream;
 use uuid::Uuid;
 
 struct AppState {
     synth: Option<PiperSpeechSynthesizer>,
+    chat_stream: Option<TcpStream>,
 }
 
 lazy_static! {
-    static ref APP_STATE: Mutex<AppState> = Mutex::new(AppState { synth: None });
+    static ref APP_STATE: Mutex<AppState> = Mutex::new(AppState {
+        synth: None,
+        chat_stream: None,
+    });
 }
 
 fn get_temp_dir() -> String {
