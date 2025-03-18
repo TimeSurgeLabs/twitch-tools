@@ -3,7 +3,14 @@ import reactLogo from "./assets/react.svg";
 import { invoke } from "@tauri-apps/api/core";
 import { readFile } from "@tauri-apps/plugin-fs";
 import * as path from "@tauri-apps/api/path";
+import { listen } from '@tauri-apps/api/event';
 import "./App.css";
+
+type DownloadStarted = {
+  url: string;
+  downloadId: number;
+  contentLength: number;
+};
 
 function App() {
   const [greetMsg, setGreetMsg] = useState("");
@@ -31,6 +38,17 @@ function App() {
         }, 1000);
       });
   }
+
+  async function startDownload() {
+    await invoke("download", { url: "https://example.com/file.mp3" });
+  }
+  
+  listen<DownloadStarted>('download-progress', (event) => {
+    console.log(
+      `downloading ${event.payload.contentLength} bytes from ${event.payload.url}`
+    );
+    setName(`hello ${JSON.stringify(event.payload)}`);
+  });
 
   return (
     <main className="container">
@@ -63,7 +81,9 @@ function App() {
         />
         <button type="submit">Greet</button>
       </form>
+      <button onClick={startDownload}>Start Download</button>
       <p>{greetMsg}</p>
+      <p>{name}</p>
     </main>
   );
 }

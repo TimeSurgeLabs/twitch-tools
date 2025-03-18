@@ -7,6 +7,24 @@ use tauri::path::BaseDirectory;
 use tauri::Manager;
 use uuid::Uuid;
 
+use tauri::{AppHandle, Emitter};
+
+#[tauri::command]
+fn download(app: AppHandle, url: String) {
+    app.emit("download-started", &url).unwrap();
+    // Clone the app handle outside the loop
+    let app_clone = app.clone();
+
+    // Spawn a single thread to handle all progress updates
+    std::thread::spawn(move || {
+        for progress in [1, 15, 50, 80, 100] {
+            std::thread::sleep(std::time::Duration::from_secs(1));
+            app_clone.emit("download-progress", progress).unwrap();
+        }
+        app_clone.emit("download-finished", &url).unwrap();
+    });
+}
+
 struct AppState {
     synth: Option<PiperSpeechSynthesizer>,
 }
@@ -65,7 +83,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_fs::init())
-        .invoke_handler(tauri::generate_handler![synth_text])
+        .invoke_handler(tauri::generate_handler![synth_text, download])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
