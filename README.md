@@ -1,6 +1,16 @@
-# Tauri + React + Typescript
+# Twitch Tools 
+A group of tools to make twitch streaming easier, including local tts  
+Built with Tauri + React + Typescript + Vite
 
-This template should help get you started developing with Tauri, React and Typescript in Vite.
+## Install and Run
+Have [tauri](https://v2.tauri.app/start/prerequisites/) installed
+Have [just](https://github.com/casey/just) installed
+
+```bash
+just build
+just dev
+```
+
 
 ## Recommended IDE Setup
 
