@@ -6,6 +6,7 @@ use piper_rs::synth::PiperSpeechSynthesizer;
 use std::env;
 use std::path::Path;
 use std::sync::Mutex;
+use std::thread;
 use tauri::path::BaseDirectory;
 use tauri::Manager;
 use uuid::Uuid;
@@ -73,34 +74,45 @@ fn synth_text(text: &str, handle: tauri::AppHandle) -> Result<String, String> {
 
 #[tauri::command]
 fn synth_and_play_text(text: &str, handle: tauri::AppHandle) -> Result<String, String> {
-    let mut app_state = APP_STATE.lock().unwrap();
-    // if the synth is None, then we need to initialize it
-    if app_state.synth.is_none() {
-        // get the resources folder
-        let resources_dir = get_resources_dir(handle);
-        let config_path = Path::new(&resources_dir).join("model.onnx.json");
-        let model = piper_rs::from_config_path(&config_path).map_err(|e| e.to_string())?;
-        model.set_speaker(50);
-        let synth = PiperSpeechSynthesizer::new(model).map_err(|e| e.to_string())?;
-        app_state.synth = Some(synth);
-    }
-    let id = Uuid::new_v4();
-    
-    // synthesize the text to speech
-    let mut samples: Vec<f32> = Vec::new();
-    let audio = app_state.synth.as_ref().unwrap().synthesize_parallel(text.to_string(), None).unwrap();
-    for result in audio {
-        samples.append(&mut result.unwrap().into_vec());
-    }
+    let text = text.to_string();
+    thread::spawn(move || {
+        let mut app_state = APP_STATE.lock().unwrap();
+        // if the synth is None, then we need to initialize it
+        if app_state.synth.is_none() {
+            // get the resources folder
+            let resources_dir = get_resources_dir(handle);
+            let config_path = Path::new(&resources_dir).join("model.onnx.json");
+            let model = piper_rs::from_config_path(&config_path)
+                .map_err(|e| e.to_string())
+                .unwrap();
+            model.set_speaker(50);
+            let synth = PiperSpeechSynthesizer::new(model)
+                .map_err(|e| e.to_string())
+                .unwrap();
+            app_state.synth = Some(synth);
+        }
 
-    // play the audio
-    let (_stream, handle) = rodio::OutputStream::try_default().unwrap();
-    let sink = rodio::Sink::try_new(&handle).unwrap();
-    let buf = SamplesBuffer::new(1, 22050, samples);
-    sink.append(buf);
-    sink.sleep_until_end();
+        // synthesize the text to speech
+        let mut samples: Vec<f32> = Vec::new();
+        let audio = app_state
+            .synth
+            .as_ref()
+            .unwrap()
+            .synthesize_parallel(text, None)
+            .unwrap();
+        for result in audio {
+            samples.append(&mut result.unwrap().into_vec());
+        }
 
-    Ok("Complete".to_string())
+        // play the audio
+        let (_stream, handle) = rodio::OutputStream::try_default().unwrap();
+        let sink = rodio::Sink::try_new(&handle).unwrap();
+        let buf = SamplesBuffer::new(1, 22050, samples);
+        sink.append(buf);
+        sink.sleep_until_end();
+    });
+
+    Ok("Started processing".to_string())
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
