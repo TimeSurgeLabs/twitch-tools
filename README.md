@@ -7,6 +7,7 @@ Have [tauri](https://v2.tauri.app/start/prerequisites/) installed
 Have [just](https://github.com/casey/just) installed
 
 ```bash
+npm install 
 just build
 just dev
 ```

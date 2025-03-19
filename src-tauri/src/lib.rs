@@ -10,6 +10,12 @@ use tauri::path::BaseDirectory;
 use tauri::Manager;
 use uuid::Uuid;
 
+use rodio::Decoder;
+use rodio::OutputStream;
+use rodio::Sink;
+use std::fs::File;
+use std::io::BufReader;
+
 struct AppState {
     synth: Option<PiperSpeechSynthesizer>,
     watched_username: String,
@@ -69,12 +75,55 @@ fn synth_text(text: &str, handle: tauri::AppHandle) -> Result<String, String> {
     Ok(temp_file_name)
 }
 
+#[tauri::command]
+fn synth_and_play_text(text: &str, handle: tauri::AppHandle) -> Result<String, String> {
+    let mut app_state = APP_STATE.lock().unwrap();
+    // if the synth is None, then we need to initialize it
+    if app_state.synth.is_none() {
+        // get the resources folder
+        let resources_dir = get_resources_dir(handle);
+        let config_path = Path::new(&resources_dir).join("model.onnx.json");
+        let model = piper_rs::from_config_path(&config_path).map_err(|e| e.to_string())?;
+        model.set_speaker(50);
+        let synth = PiperSpeechSynthesizer::new(model).map_err(|e| e.to_string())?;
+        app_state.synth = Some(synth);
+    }
+    let id = Uuid::new_v4();
+    // generate a new temp file name. Should be a {{uuid}}.wav
+    let temp_file_name = format!("{}.wav", id.to_string());
+    let temp_file_path = Path::new(&get_temp_dir()).join(temp_file_name.clone());
+
+    // synthesize the text to speech
+    app_state
+        .synth
+        .as_ref()
+        .unwrap()
+        .synthesize_to_file(Path::new(&temp_file_path), text.to_string(), None)
+        .map_err(|e| e.to_string())?;
+
+    // Initialize the audio output
+    let (_stream, stream_handle) = OutputStream::try_default().unwrap();
+    let sink = Sink::try_new(&stream_handle).unwrap();
+
+    // Open the audio file
+    let file = BufReader::new(File::open(&temp_file_path).unwrap());
+
+    // Decode the audio file
+    let decoder = Decoder::new(file).unwrap();
+
+    // Play the audio
+    sink.append(decoder);
+    sink.sleep_until_end();
+
+    Ok("temp_file_name".to_string())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_fs::init())
-        .invoke_handler(tauri::generate_handler![synth_text])
+        .invoke_handler(tauri::generate_handler![synth_text, synth_and_play_text])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

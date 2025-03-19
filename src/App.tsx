@@ -38,6 +38,13 @@ function App() {
       });
   }
 
+  async function synthesizeAndPlayAudio() {
+    setGreetMsg("Synthesizing and playing audio...");
+    await invoke("synth_and_play_text", {
+      text: textToSynthesize,
+    });
+  }
+
   return (
     <main className="container mx-auto p-4 max-w-2xl">
       <Card className="w-full">
@@ -79,7 +86,8 @@ function App() {
             className="space-y-4"
             onSubmit={(e) => {
               e.preventDefault();
-              synthesizeSpeech();
+              //synthesizeSpeech();
+              synthesizeAndPlayAudio();
             }}
           >
             <div className="space-y-2">
