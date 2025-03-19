@@ -10,11 +10,7 @@ use tauri::path::BaseDirectory;
 use tauri::Manager;
 use uuid::Uuid;
 
-use rodio::Decoder;
-use rodio::OutputStream;
-use rodio::Sink;
-use std::fs::File;
-use std::io::BufReader;
+use rodio::buffer::SamplesBuffer;
 
 struct AppState {
     synth: Option<PiperSpeechSynthesizer>,
@@ -89,33 +85,22 @@ fn synth_and_play_text(text: &str, handle: tauri::AppHandle) -> Result<String, S
         app_state.synth = Some(synth);
     }
     let id = Uuid::new_v4();
-    // generate a new temp file name. Should be a {{uuid}}.wav
-    let temp_file_name = format!("{}.wav", id.to_string());
-    let temp_file_path = Path::new(&get_temp_dir()).join(temp_file_name.clone());
-
+    
     // synthesize the text to speech
-    app_state
-        .synth
-        .as_ref()
-        .unwrap()
-        .synthesize_to_file(Path::new(&temp_file_path), text.to_string(), None)
-        .map_err(|e| e.to_string())?;
+    let mut samples: Vec<f32> = Vec::new();
+    let audio = app_state.synth.as_ref().unwrap().synthesize_parallel(text.to_string(), None).unwrap();
+    for result in audio {
+        samples.append(&mut result.unwrap().into_vec());
+    }
 
-    // Initialize the audio output
-    let (_stream, stream_handle) = OutputStream::try_default().unwrap();
-    let sink = Sink::try_new(&stream_handle).unwrap();
-
-    // Open the audio file
-    let file = BufReader::new(File::open(&temp_file_path).unwrap());
-
-    // Decode the audio file
-    let decoder = Decoder::new(file).unwrap();
-
-    // Play the audio
-    sink.append(decoder);
+    // play the audio
+    let (_stream, handle) = rodio::OutputStream::try_default().unwrap();
+    let sink = rodio::Sink::try_new(&handle).unwrap();
+    let buf = SamplesBuffer::new(1, 22050, samples);
+    sink.append(buf);
     sink.sleep_until_end();
 
-    Ok("temp_file_name".to_string())
+    Ok("Complete".to_string())
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
