@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import reactLogo from "./assets/react.svg";
 import { invoke } from "@tauri-apps/api/core";
 import "./App.css";
@@ -16,6 +16,7 @@ function App() {
     setGreetMsg(message as string);
   }
 
+  // Function to synthesize and play audio
   async function synthesizeAndPlayAudio() {
     setGreetMsg("Synthesizing and playing audio...");
     const message = await invoke("synth_and_play_text", {
@@ -23,6 +24,38 @@ function App() {
     });
     setGreetMsg(message as string);
   }
+
+  // Function to set the Twitch username to Tauri
+  async function setTwitchUsernameToTauri(username: string) {
+    const message = await invoke("set_twitch_username", {
+      username: username,
+    });
+    setGreetMsg(message as string);
+  }
+
+  // Effect to get Twitch username on component mount
+  const [twitchUsername, setTwitchUsername] = useState("Twitch Username Here");
+  
+  // Function to fetch the Twitch username from the backend
+  async function fetchTwitchUsername() {
+    try {
+      const username = await invoke("get_twitch_username") as string;
+      setTwitchUsername(username);
+      if (username) {
+        setGreetMsg(`Connected to Twitch username: ${username}`);
+      } else {
+        setGreetMsg("No Twitch username set. Please configure one.");
+      }
+    } catch (error) {
+      console.error("Failed to fetch Twitch username:", error);
+      setGreetMsg("Error fetching Twitch username");
+    }
+  }
+  
+  // Call the function when component mounts
+  useEffect(() => {
+    fetchTwitchUsername();
+  }, []);
 
   return (
     <main className="container mx-auto p-4 max-w-2xl">
@@ -84,8 +117,24 @@ function App() {
           </form>
 
           <Button onClick={testCommand} className="w-full">
-            Test Command
+            Start Chat Twitch Connection
           </Button>
+
+          <div className="space-y-2 mt-4">
+            <Label htmlFor="twitch-username">Twitch Username</Label>
+            <div className="flex gap-2">
+              <Input
+                id="twitch-username"
+                value={twitchUsername}
+                onChange={(e) => setTwitchUsername(e.currentTarget.value)}
+                placeholder="Enter your Twitch username..."
+              />
+              <Button onClick={() => setTwitchUsernameToTauri(twitchUsername)}>
+                Save
+              </Button>
+            </div>
+          </div>
+          <p>Twitch Username: {twitchUsername}</p>
 
           {greetMsg && (
             <p className="text-center text-sm text-muted-foreground">

@@ -11,6 +11,78 @@ use tauri::Manager;
 
 use rodio::buffer::SamplesBuffer;
 
+use serde::{Deserialize, Serialize};
+use serde_json;
+use std::fs;
+use std::path::PathBuf;
+#[derive(Serialize, Deserialize, Default, Debug)]
+struct Config {
+    twitch_username: String,
+}
+
+// Load config function using Tauri's config system
+fn load_config(app: &tauri::AppHandle) -> Config {
+    let config_path = app
+        .path()
+        .resolve("config.json", BaseDirectory::AppConfig)
+        .unwrap_or_else(|_| {
+            app.path()
+                .resolve("config.json", BaseDirectory::AppLocalData)
+                .unwrap()
+        });
+
+    if let Ok(contents) = fs::read_to_string(&config_path) {
+        serde_json::from_str(&contents).unwrap_or_default()
+    } else {
+        Config::default()
+    }
+}
+
+// Save config function using Tauri's config system
+fn save_config(app: &tauri::AppHandle, config: &Config) -> Result<(), Box<dyn std::error::Error>> {
+    let config_path = app
+        .path()
+        .resolve("config.json", BaseDirectory::AppConfig)
+        .unwrap_or_else(|_| {
+            app.path()
+                .resolve("config.json", BaseDirectory::AppLocalData)
+                .unwrap()
+        });
+
+    println!("Saving config to: {}", config_path.display());
+
+    // Create parent directory if it doesn't exist
+    if let Some(parent) = config_path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+
+    let contents = serde_json::to_string_pretty(config)?;
+    fs::write(config_path, contents)?;
+    Ok(())
+}
+
+// Tauri command
+#[tauri::command]
+fn set_twitch_username(app: tauri::AppHandle, username: String) -> Result<String, String> {
+    let mut config = load_config(&app);
+    config.twitch_username = username;
+    save_config(&app, &config).map_err(|e| e.to_string())?;
+    Ok("Username updated successfully".to_string())
+}
+
+#[tauri::command]
+fn get_twitch_username(app: tauri::AppHandle) -> Result<String, String> {
+    let config = load_config(&app);
+    Ok(config.twitch_username)
+}
+
+#[tauri::command]
+fn print_config(app: tauri::AppHandle) -> Result<String, String> {
+    let config = load_config(&app);
+    println!("Current config: {:?}", config);
+    Ok("Config printed to console".to_string())
+}
+
 struct AppState {
     synth: Option<PiperSpeechSynthesizer>,
     watched_username: String,
@@ -41,8 +113,10 @@ fn get_resources_dir(handle: tauri::AppHandle) -> String {
 // This command sythesizes and plays text
 #[tauri::command]
 fn synth_and_play_text(text: &str, handle: tauri::AppHandle) -> Result<String, String> {
+    println!("Synthesizing and playing text: {}", text);
     let text = text.to_string();
     thread::spawn(move || {
+        println!("Thread Synthesizing and playing text: {}", text);
         let mut app_state = APP_STATE.lock().unwrap();
         // if the synth is None, then we need to initialize it
         if app_state.synth.is_none() {
@@ -77,6 +151,7 @@ fn synth_and_play_text(text: &str, handle: tauri::AppHandle) -> Result<String, S
         let buf = SamplesBuffer::new(1, 22050, samples);
         sink.append(buf);
         sink.sleep_until_end();
+        println!("Thread finished synthesizing and playing");
     });
 
     Ok("Started processing".to_string())
@@ -93,7 +168,13 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_fs::init())
-        .invoke_handler(tauri::generate_handler![synth_and_play_text, test_command])
+        .invoke_handler(tauri::generate_handler![
+            synth_and_play_text,
+            test_command,
+            set_twitch_username,
+            get_twitch_username,
+            print_config,
+        ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
