@@ -1,8 +1,6 @@
 import { useState } from "react";
 import reactLogo from "./assets/react.svg";
 import { invoke } from "@tauri-apps/api/core";
-import { readFile } from "@tauri-apps/plugin-fs";
-import * as path from "@tauri-apps/api/path";
 import "./App.css";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -13,36 +11,17 @@ function App() {
   const [greetMsg, setGreetMsg] = useState("");
   const [textToSynthesize, setTextToSynthesize] = useState("");
 
-  async function synthesizeSpeech() {
-    setGreetMsg("Synthesizing audio...");
-    // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
-    const tempFileName: string = await invoke("synth_text", {
-      text: textToSynthesize,
-    });
-    const fileContent = await readFile(tempFileName, {
-      baseDir: path.BaseDirectory.Temp,
-    });
-
-    setGreetMsg("Playing audio...");
-    const audio = new Audio(URL.createObjectURL(new Blob([fileContent])));
-    audio
-      .play()
-      .catch((error) => {
-        console.error("Error playing audio:", error);
-      })
-      .finally(() => {
-        setGreetMsg("Audio playback complete");
-        setTimeout(() => {
-          setGreetMsg("");
-        }, 1000);
-      });
+  async function testCommand() {
+    const message = await invoke("test_command");
+    setGreetMsg(message as string);
   }
 
   async function synthesizeAndPlayAudio() {
     setGreetMsg("Synthesizing and playing audio...");
-    await invoke("synth_and_play_text", {
+    const message = await invoke("synth_and_play_text", {
       text: textToSynthesize,
     });
+    setGreetMsg(message as string);
   }
 
   return (
@@ -103,6 +82,10 @@ function App() {
               Synthesize Speech
             </Button>
           </form>
+
+          <Button onClick={testCommand} className="w-full">
+            Test Command
+          </Button>
 
           {greetMsg && (
             <p className="text-center text-sm text-muted-foreground">

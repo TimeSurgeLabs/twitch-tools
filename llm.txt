@@ -1,0 +1,19 @@
+# twitch-tools 
+Twitch-tools is a tauri app that allows users to have local text to speech using rust libraries.
+
+The frontend will eventually have a config file that contains the twitch username that should be followed.
+
+Note that the frontend sends commands to the rust backend.
+
+The intention is for there to exist 3 threads. 
+
+The first /main thread is intended to receive events to start/stop the other threads
+
+The second thread is intended to be a tts thread. This thread reads off the "tts_queue" as fast as it can, generates the audio, and pushes the autio do the "playing_queue" 
+
+The third thread is intended to play the audio such that it consumes the audio on the "playing queue" This thread should also listen to events to skip the currently playing audio if a given key combination is pressed
+
+The third thread is intended to connect to twitch chat and when messages come in, to send them in a queue to the second thread.
+
+Is this doable in rust? if so how?
+

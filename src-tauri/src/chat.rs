@@ -1,7 +1,7 @@
 use anyhow::Result;
 use lazy_static::lazy_static;
 use regex::Regex;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::TcpStream;
 
 const SERVER: &str = "irc.chat.twitch.tv";
@@ -76,3 +76,39 @@ pub fn parse_message(message: &str) -> Option<ChatMessage> {
         _ => None,
     }
 }
+
+
+
+pub async fn test_function() -> Result<()> {
+    let channel = "kylevasulka"; 
+    let stream = connect_to_twitch_chat(channel, None).await?;
+    let mut reader = BufReader::new(stream);
+    let mut line = String::new();
+
+    println!("Starting to read messages...");
+
+    loop {
+        line.clear();
+        match reader.read_line(&mut line).await {
+            Ok(0) => {
+                println!("Connection closed by server");
+                break;
+            }
+            Ok(_) => {
+                // Print raw message for debugging
+                // println!("Raw message: {}", line.trim());
+
+                if let Some(message) = parse_message(&line) {
+                    println!("{}: {}", message.username, message.content);
+                }
+            }
+            Err(e) => {
+                println!("Error reading from stream: {}", e);
+                break;
+            }
+        }
+    }
+
+    Ok(())
+}
+

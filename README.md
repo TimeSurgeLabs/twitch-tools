@@ -3,8 +3,9 @@ A group of tools to make twitch streaming easier, including local tts
 Built with Tauri + React + Typescript + Vite
 
 ## Install and Run
-Have [tauri](https://v2.tauri.app/start/prerequisites/) installed
-Have [just](https://github.com/casey/just) installed
+Have [tauri](https://v2.tauri.app/start/prerequisites/) installed  
+Have [just](https://github.com/casey/just) installed  
+Note: On windows you might also need LLVM `winget install llvm`  
 
 ```bash
 npm install 
