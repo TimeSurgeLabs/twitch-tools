@@ -25,3 +25,6 @@ dist-ssr
 
 # local files that we'll fetch later
 resources
+
+# environment variables
+.env

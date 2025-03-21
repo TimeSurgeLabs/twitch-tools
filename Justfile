@@ -1,3 +1,4 @@
+set dotenv-load
 MODEL_URL := "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/libritts_r/medium/en_US-libritts_r-medium.onnx"
 CONFIG_URL := "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/libritts_r/medium/en_US-libritts_r-medium.onnx.json"
 
@@ -8,8 +9,17 @@ default:
 build: _fetch-resources
   npm run tauri build
 
+
+build-mac-universal:_fetch-resources
+  npm run tauri build --target universal-apple-darwin
+
+
+
 dev: _fetch-resources
   npm run tauri dev
+
+test:
+  echo $APPLE_SIGNING_IDENTITY
 
 _fetch-resources:
   #!/bin/bash
