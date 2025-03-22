@@ -40,7 +40,7 @@ _fetch-resources:
     curl -L -o resources/model.onnx.json {{CONFIG_URL}}
   fi
 
-  if [ ! -f "resources/espeak-ng-data" ]; then
+  if [ ! -d "resources/espeak-ng-data" ]; then
     echo "Espeak-ng data not found, downloading it"
     curl -L -o resources/espeak-ng-data.tar.gz {{ESPEAKNG_DATA_URL}}
     tar -xzf resources/espeak-ng-data.tar.gz -C resources
