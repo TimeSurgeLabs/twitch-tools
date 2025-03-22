@@ -113,48 +113,67 @@ fn get_resources_dir(handle: tauri::AppHandle) -> String {
 // This command sythesizes and plays text
 #[tauri::command]
 fn synth_and_play_text(text: &str, handle: tauri::AppHandle) -> Result<String, String> {
+    // set PIPER_ESPEAKNG_DATA_DIRECTORY to the resources/espeak-ng folder
+    let resources_dir = get_resources_dir(handle.clone());
+    env::set_var(
+        "PIPER_ESPEAKNG_DATA_DIRECTORY",
+        format!("{}", resources_dir),
+    );
+
+    // Read the variable back and log it to the console.
+    match env::var("PIPER_ESPEAKNG_DATA_DIRECTORY") {
+        Ok(val) => println!("PIPER_ESPEAKNG_DATA_DIRECTORY is set to: {}", val),
+        Err(e) => println!("Error reading env variable: {}", e),
+    }
+    // return the environment variable
+
+    // Ok::<String, String>(env::var("PIPER_ESPEAKNG_DATA_DIRECTORY").unwrap())
+
     println!("Synthesizing and playing text: {}", text);
     let text = text.to_string();
-    thread::spawn(move || {
-        println!("Thread Synthesizing and playing text: {}", text);
-        let mut app_state = APP_STATE.lock().unwrap();
-        // if the synth is None, then we need to initialize it
-        if app_state.synth.is_none() {
-            // get the resources folder
-            let resources_dir = get_resources_dir(handle);
-            let config_path = Path::new(&resources_dir).join("model.onnx.json");
-            let model = piper_rs::from_config_path(&config_path)
-                .map_err(|e| e.to_string())
-                .unwrap();
-            model.set_speaker(50);
-            let synth = PiperSpeechSynthesizer::new(model)
-                .map_err(|e| e.to_string())
-                .unwrap();
-            app_state.synth = Some(synth);
-        }
-
-        // synthesize the text to speech
-        let mut samples: Vec<f32> = Vec::new();
-        let audio = app_state
-            .synth
-            .as_ref()
-            .unwrap()
-            .synthesize_parallel(text, None)
+    // thread::spawn(move || {
+    println!("Thread Synthesizing and playing text: {}", text);
+    let mut app_state = APP_STATE.lock().unwrap();
+    // if the synth is None, then we need to initialize it
+    if app_state.synth.is_none() {
+        // get the resources folder
+        let resources_dir = get_resources_dir(handle);
+        let config_path = Path::new(&resources_dir).join("model.onnx.json");
+        let model = piper_rs::from_config_path(&config_path)
+            .map_err(|e| e.to_string())
             .unwrap();
-        for result in audio {
-            samples.append(&mut result.unwrap().into_vec());
-        }
+        model.set_speaker(50);
+        let synth = PiperSpeechSynthesizer::new(model)
+            .map_err(|e| e.to_string())
+            .unwrap();
+        app_state.synth = Some(synth);
+    }
 
-        // play the audio
-        let (_stream, handle) = rodio::OutputStream::try_default().unwrap();
-        let sink = rodio::Sink::try_new(&handle).unwrap();
-        let buf = SamplesBuffer::new(1, 22050, samples);
-        sink.append(buf);
-        sink.sleep_until_end();
-        println!("Thread finished synthesizing and playing");
-    });
+    // synthesize the text to speech
+    let mut samples: Vec<f32> = Vec::new();
+    let audio = match app_state
+        .synth
+        .as_ref()
+        .unwrap()
+        .synthesize_parallel(text, None)
+    {
+        Ok(audio) => audio,
+        Err(e) => return Ok(format!("Error synthesizing speech, Is this application in the applications folder?: {}", e)),
+    };
+    for result in audio {
+        samples.append(&mut result.unwrap().into_vec());
+    }
 
-    Ok("Started processing".to_string())
+    // play the audio
+    let (_stream, handle) = rodio::OutputStream::try_default().unwrap();
+    let sink = rodio::Sink::try_new(&handle).unwrap();
+    let buf = SamplesBuffer::new(1, 22050, samples);
+    sink.append(buf);
+    sink.sleep_until_end();
+    println!("Thread finished synthesizing and playing");
+    // });
+
+    Ok("Did this crash?".to_string())
 }
 
 #[tauri::command]

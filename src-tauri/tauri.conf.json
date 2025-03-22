@@ -32,7 +32,7 @@
       "icons/icon.ico"
     ],
     "resources": {
-      "../resources/**/*": "resources/"
+      "../resources": "resources"
     },
     "macOS": {
       "signingIdentity": "Developer ID Application: Kyle Vasulka (456K833T7Q)"
