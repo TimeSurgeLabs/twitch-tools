@@ -9,11 +9,8 @@ default:
 build: _fetch-resources
   npm run tauri build
 
-
-build-mac-universal:_fetch-resources
-  npm run tauri build --target universal-apple-darwin
-
-
+build-intel-mac:_fetch-resources
+  npm run tauri build -- --target x86_64-apple-darwin
 
 dev: _fetch-resources
   npm run tauri dev
