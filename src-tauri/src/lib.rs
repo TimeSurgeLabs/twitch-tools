@@ -97,9 +97,6 @@ lazy_static! {
     });
 }
 
-fn get_temp_dir() -> String {
-    env::temp_dir().to_string_lossy().to_string()
-}
 
 fn get_resources_dir(handle: tauri::AppHandle) -> PathBuf {
     let path = handle
@@ -187,7 +184,8 @@ fn synth_and_play_text(text: &str, handle: tauri::AppHandle) -> Result<String, S
 
 #[tauri::command]
 async fn test_command(handle: tauri::AppHandle) -> Result<String, String> {
-    chat::test_function().await.map_err(|e| e.to_string())?;
+    let config = load_config(&handle);
+    chat::test_function(&config.twitch_username).await.map_err(|e| e.to_string())?;
     Ok("Chat connection successful".to_string())
 }
 

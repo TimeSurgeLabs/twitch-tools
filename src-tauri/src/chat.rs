@@ -79,8 +79,8 @@ pub fn parse_message(message: &str) -> Option<ChatMessage> {
 
 
 
-pub async fn test_function() -> Result<()> {
-    let channel = "kylevasulka"; 
+pub async fn test_function(channel: &str) -> Result<()> {
+    // let channel = "kylevasulka"; 
     let stream = connect_to_twitch_chat(channel, None).await?;
     let mut reader = BufReader::new(stream);
     let mut line = String::new();
