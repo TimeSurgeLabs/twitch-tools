@@ -101,13 +101,18 @@ fn get_temp_dir() -> String {
     env::temp_dir().to_string_lossy().to_string()
 }
 
-fn get_resources_dir(handle: tauri::AppHandle) -> String {
-    handle
+fn get_resources_dir(handle: tauri::AppHandle) -> PathBuf {
+    let path = handle
         .path()
         .resolve("resources", BaseDirectory::Resource)
-        .unwrap()
-        .to_string_lossy()
-        .to_string()
+        .unwrap();
+    // Remove \\?\ prefix if present
+    let path_str = path.to_string_lossy();
+    if path_str.starts_with(r"\\?\") {
+        PathBuf::from(path_str.trim_start_matches(r"\\?\"))
+    } else {
+        path
+    }
 }
 
 // This command sythesizes and plays text
@@ -117,7 +122,7 @@ fn synth_and_play_text(text: &str, handle: tauri::AppHandle) -> Result<String, S
     let resources_dir = get_resources_dir(handle.clone());
     env::set_var(
         "PIPER_ESPEAKNG_DATA_DIRECTORY",
-        format!("{}", resources_dir),
+        resources_dir.to_string_lossy().to_string(),
     );
 
     // Read the variable back and log it to the console.
@@ -151,15 +156,19 @@ fn synth_and_play_text(text: &str, handle: tauri::AppHandle) -> Result<String, S
 
     // synthesize the text to speech
     let mut samples: Vec<f32> = Vec::new();
-    let audio = match app_state
-        .synth
-        .as_ref()
-        .unwrap()
-        .synthesize_parallel(text, None)
-    {
-        Ok(audio) => audio,
-        Err(e) => return Ok(format!("Error synthesizing speech, Is this application in the applications folder?: {}", e)),
-    };
+    let audio =
+        match app_state
+            .synth
+            .as_ref()
+            .unwrap()
+            .synthesize_parallel(text, None)
+        {
+            Ok(audio) => audio,
+            Err(e) => return Ok(format!(
+                "Error synthesizing speech, Is this application in the applications folder?: {}",
+                e
+            )),
+        };
     for result in audio {
         samples.append(&mut result.unwrap().into_vec());
     }

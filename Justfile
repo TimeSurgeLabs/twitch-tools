@@ -1,7 +1,7 @@
 set dotenv-load
 MODEL_URL := "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/libritts_r/medium/en_US-libritts_r-medium.onnx"
 CONFIG_URL := "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/libritts_r/medium/en_US-libritts_r-medium.onnx.json"
-
+ESPEAKNG_DATA_URL := "https://github.com/thewh1teagle/piper-rs/releases/download/espeak-ng-files/espeak-ng-data.tar.gz"
 
 default:
   just --list
@@ -40,9 +40,15 @@ _fetch-resources:
     curl -L -o resources/model.onnx.json {{CONFIG_URL}}
   fi
 
+  if [ ! -f "resources/espeak-ng-data" ]; then
+    echo "Espeak-ng data not found, downloading it"
+    curl -L -o resources/espeak-ng-data.tar.gz {{ESPEAKNG_DATA_URL}}
+    tar -xzf resources/espeak-ng-data.tar.gz -C resources
+    rm -rf resources/espeak-ng-data.tar.gz
+  fi
+
   
 clean:
-  rm -rf resources/model.onnx
-  rm -rf resources/model.onnx.json
+  rm -rf resources
   rm -rf src-tauri/target
   rm -rf dist
