@@ -3,6 +3,9 @@ use lazy_static::lazy_static;
 use regex::Regex;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::TcpStream;
+use std::sync::mpsc::Sender;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 
 const SERVER: &str = "irc.chat.twitch.tv";
 const PORT: u16 = 6667;
@@ -100,6 +103,54 @@ pub async fn test_function(channel: &str) -> Result<()> {
 
                 if let Some(message) = parse_message(&line) {
                     println!("{}: {}", message.username, message.content);
+                }
+            }
+            Err(e) => {
+                println!("Error reading from stream: {}", e);
+                break;
+            }
+        }
+    }
+
+    Ok(())
+}
+
+pub async fn start_twitch_chat_reader(channel: &str, tts_tx: &Sender<String>, kill_flag: &Arc<AtomicBool>) -> Result<()> {
+    // let channel = "kylevasulka"; 
+    let stream = connect_to_twitch_chat(channel, None).await?;
+    let mut reader = BufReader::new(stream);
+    let mut line = String::new();
+
+    println!("Starting to read messages...");
+
+    loop {
+        if kill_flag.load(Ordering::SeqCst) {
+            println!("Kill signal received, stopping twitch chat reader...");
+            break;
+        }
+        line.clear();
+        match reader.read_line(&mut line).await {
+            Ok(0) => {
+                println!("Connection closed by server");
+                break;
+            }
+            Ok(_) => {
+                // Print raw message for debugging
+                // println!("Raw message: {}", line.trim());
+                if kill_flag.load(Ordering::SeqCst) {
+                    println!("Kill signal received, stopping twitch chat reader...");
+                    break;
+                }
+
+                if let Some(message) = parse_message(&line) {
+                    println!("{}: {}", message.username, message.content);
+                    match tts_tx.send(format!("user {} said {}", message.username, message.content)) {
+                        Ok(_) => {},
+                        Err(_) => {
+                            println!("Invalid tts_tx, another twitch_chat_reader is likely running, killing self");
+                            break;
+                        }
+                    }
                 }
             }
             Err(e) => {

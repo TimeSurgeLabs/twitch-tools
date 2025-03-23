@@ -1,11 +1,12 @@
 mod chat;
+mod tts;
 
 use lazy_static::lazy_static;
 use piper_rs::synth::PiperSpeechSynthesizer;
 use std::env;
 use std::path::Path;
-use std::sync::Mutex;
-use std::thread;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 use tauri::path::BaseDirectory;
 use tauri::Manager;
 
@@ -15,6 +16,9 @@ use serde::{Deserialize, Serialize};
 use serde_json;
 use std::fs;
 use std::path::PathBuf;
+use std::sync::mpsc::{channel, Sender, Receiver};
+use std::thread;
+
 #[derive(Serialize, Deserialize, Default, Debug)]
 struct Config {
     twitch_username: String,
@@ -85,15 +89,21 @@ fn print_config(app: tauri::AppHandle) -> Result<String, String> {
 
 struct AppState {
     synth: Option<PiperSpeechSynthesizer>,
-    watched_username: String,
-    stream_chat: bool,
+    tts_tx: Option<Sender<String>>,
+    tts_rx: Option<Receiver<String>>,
+    kill_flag: Option<Arc<AtomicBool>>,
+    audio_tx: Option<Sender<Vec<f32>>>,
+    audio_rx: Option<Receiver<Vec<f32>>>,
 }
 
 lazy_static! {
     static ref APP_STATE: Mutex<AppState> = Mutex::new(AppState {
         synth: None,
-        watched_username: String::new(),
-        stream_chat: false,
+        tts_tx: None,
+        tts_rx: None,
+        kill_flag: None,
+        audio_tx: None,
+        audio_rx: None,
     });
 }
 
@@ -179,7 +189,7 @@ fn synth_and_play_text(text: &str, handle: tauri::AppHandle) -> Result<String, S
     println!("Thread finished synthesizing and playing");
     // });
 
-    Ok("Did this crash?".to_string())
+    Ok("Finished TTS!".to_string())
 }
 
 #[tauri::command]
@@ -187,6 +197,109 @@ async fn test_command(handle: tauri::AppHandle) -> Result<String, String> {
     let config = load_config(&handle);
     chat::test_function(&config.twitch_username).await.map_err(|e| e.to_string())?;
     Ok("Chat connection successful".to_string())
+}
+
+#[tauri::command]
+fn start_twitch_chat_reader(handle: tauri::AppHandle) -> Result<String, String> {
+    let config = load_config(&handle);
+
+    // Create a channel for communication
+    let (tts_tx, tts_rx): (Sender<String>, Receiver<String>) = channel(); // Twitch -> TTS
+    let tts_tx_clone = tts_tx.clone();
+    let kill_flag = Arc::new(AtomicBool::new(false)); // NEW
+    let kill_flag_clone = kill_flag.clone();
+    
+    {
+        // set the tts_tx and tts_rx in the app state
+        let mut app_state = APP_STATE.lock().unwrap();
+        app_state.tts_tx = Some(tts_tx);
+        app_state.tts_rx = Some(tts_rx);
+        app_state.kill_flag = Some(kill_flag); // store for later kill
+    };
+
+    
+    let channel_name = config.twitch_username.clone();
+    thread::spawn(move || {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            if let Err(e) = chat::start_twitch_chat_reader(&channel_name, &tts_tx_clone, &kill_flag_clone).await {
+                eprintln!("Error in Twitch chat reader: {}", e);
+            }
+        });
+    });
+
+    // create tts->audio channel of Vec<f32>
+    let (audio_tx, audio_rx): (Sender<Vec<f32>>, Receiver<Vec<f32>>) = channel(); // TTS -> Audio
+    let audio_tx_clone = audio_tx.clone();
+    {
+        let mut app_state = APP_STATE.lock().unwrap();
+        app_state.audio_tx = Some(audio_tx);
+        app_state.audio_rx = Some(audio_rx);
+    };
+
+    // get vars for tts->audio thread
+    let resources_dir = get_resources_dir(handle);
+    let (tts_rx, audio_tx, kill_flag) = {
+        let mut app_state = APP_STATE.lock().unwrap();
+        (
+            app_state.tts_rx.take().unwrap(), 
+            app_state.audio_tx.as_ref().unwrap().clone(),
+            app_state.kill_flag.as_ref().unwrap().clone()
+        )
+    };
+
+    // create tts->audio thread
+    thread::spawn(move || {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            tts::synth_loop(tts_rx, &audio_tx, &kill_flag, &resources_dir).await.unwrap();
+        });
+    });
+
+    // get vars for audio->play thread
+    let (audio_rx, kill_flag) = {
+        let mut app_state = APP_STATE.lock().unwrap();
+        (
+            app_state.audio_rx.take().unwrap(), 
+            app_state.kill_flag.as_ref().unwrap().clone()
+        )
+    };
+
+    // create audio->play thread
+    thread::spawn(move || {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            tts::audio_loop(audio_rx, &kill_flag).await.unwrap();
+        });
+    });
+
+    
+    Ok("Twitch chat reader started".to_string())
+}
+
+#[tauri::command]
+fn kill_twitch_chat_reader() -> Result<String, String> {
+    println!("Killing twitch chat reader");
+    println!("Attempting to acquire APP_STATE lock");
+    let mut app_state = match APP_STATE.lock() {
+        Ok(state) => {
+            println!("Successfully acquired APP_STATE lock");
+            state
+        },
+        Err(e) => {
+            println!("Error acquiring APP_STATE lock: {}", e);
+            return Err("Failed to acquire application state lock".to_string());
+        }
+    };
+    println!("got here");
+    if let Some(flag) = &app_state.kill_flag {
+        println!("Setting kill flag");
+        flag.store(true, Ordering::SeqCst); // Signal the thread to stop
+        Ok("Twitch chat reader kill signal sent.".to_string())
+    } else {
+        println!("No chat reader running.");
+        Err("No chat reader running.".to_string())
+    }
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -200,6 +313,8 @@ pub fn run() {
             set_twitch_username,
             get_twitch_username,
             print_config,
+            start_twitch_chat_reader,
+            kill_twitch_chat_reader,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
