@@ -1,118 +1,305 @@
 mod chat;
+mod tts;
 
-use crate::chat::connect_to_twitch_chat;
 use lazy_static::lazy_static;
 use piper_rs::synth::PiperSpeechSynthesizer;
 use std::env;
 use std::path::Path;
-use std::sync::Mutex;
-use std::thread;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 use tauri::path::BaseDirectory;
 use tauri::Manager;
-use uuid::Uuid;
 
 use rodio::buffer::SamplesBuffer;
 
+use serde::{Deserialize, Serialize};
+use serde_json;
+use std::fs;
+use std::path::PathBuf;
+use std::sync::mpsc::{channel, Sender, Receiver};
+use std::thread;
+
+#[derive(Serialize, Deserialize, Default, Debug)]
+struct Config {
+    twitch_username: String,
+}
+
+// Load config function using Tauri's config system
+fn load_config(app: &tauri::AppHandle) -> Config {
+    let config_path = app
+        .path()
+        .resolve("config.json", BaseDirectory::AppConfig)
+        .unwrap_or_else(|_| {
+            app.path()
+                .resolve("config.json", BaseDirectory::AppLocalData)
+                .unwrap()
+        });
+
+    if let Ok(contents) = fs::read_to_string(&config_path) {
+        serde_json::from_str(&contents).unwrap_or_default()
+    } else {
+        Config::default()
+    }
+}
+
+// Save config function using Tauri's config system
+fn save_config(app: &tauri::AppHandle, config: &Config) -> Result<(), Box<dyn std::error::Error>> {
+    let config_path = app
+        .path()
+        .resolve("config.json", BaseDirectory::AppConfig)
+        .unwrap_or_else(|_| {
+            app.path()
+                .resolve("config.json", BaseDirectory::AppLocalData)
+                .unwrap()
+        });
+
+    println!("Saving config to: {}", config_path.display());
+
+    // Create parent directory if it doesn't exist
+    if let Some(parent) = config_path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+
+    let contents = serde_json::to_string_pretty(config)?;
+    fs::write(config_path, contents)?;
+    Ok(())
+}
+
+// Tauri command
+#[tauri::command]
+fn set_twitch_username(app: tauri::AppHandle, username: String) -> Result<String, String> {
+    let mut config = load_config(&app);
+    config.twitch_username = username;
+    save_config(&app, &config).map_err(|e| e.to_string())?;
+    Ok("Username updated successfully".to_string())
+}
+
+#[tauri::command]
+fn get_twitch_username(app: tauri::AppHandle) -> Result<String, String> {
+    let config = load_config(&app);
+    Ok(config.twitch_username)
+}
+
+#[tauri::command]
+fn print_config(app: tauri::AppHandle) -> Result<String, String> {
+    let config = load_config(&app);
+    println!("Current config: {:?}", config);
+    Ok("Config printed to console".to_string())
+}
+
 struct AppState {
     synth: Option<PiperSpeechSynthesizer>,
-    watched_username: String,
-    stream_chat: bool,
+    tts_tx: Option<Sender<String>>,
+    tts_rx: Option<Receiver<String>>,
+    kill_flag: Option<Arc<AtomicBool>>,
+    audio_tx: Option<Sender<Vec<f32>>>,
+    audio_rx: Option<Receiver<Vec<f32>>>,
 }
 
 lazy_static! {
     static ref APP_STATE: Mutex<AppState> = Mutex::new(AppState {
         synth: None,
-        watched_username: String::new(),
-        stream_chat: false,
+        tts_tx: None,
+        tts_rx: None,
+        kill_flag: None,
+        audio_tx: None,
+        audio_rx: None,
     });
 }
 
-fn get_temp_dir() -> String {
-    env::temp_dir().to_string_lossy().to_string()
-}
 
-fn get_resources_dir(handle: tauri::AppHandle) -> String {
-    handle
+fn get_resources_dir(handle: tauri::AppHandle) -> PathBuf {
+    let path = handle
         .path()
         .resolve("resources", BaseDirectory::Resource)
-        .unwrap()
-        .to_string_lossy()
-        .to_string()
+        .unwrap();
+    // Remove \\?\ prefix if present
+    let path_str = path.to_string_lossy();
+    if path_str.starts_with(r"\\?\") {
+        PathBuf::from(path_str.trim_start_matches(r"\\?\"))
+    } else {
+        path
+    }
 }
 
-// this command will synthesize text to speech and output the path to the new temp file
-// the temp file will be deleted when the app closes
-// the command will return the path to the temp file
+// This command sythesizes and plays text
 #[tauri::command]
-fn synth_text(text: &str, handle: tauri::AppHandle) -> Result<String, String> {
+fn synth_and_play_text(text: &str, handle: tauri::AppHandle) -> Result<String, String> {
+    // set PIPER_ESPEAKNG_DATA_DIRECTORY to the resources/espeak-ng folder
+    let resources_dir = get_resources_dir(handle.clone());
+    env::set_var(
+        "PIPER_ESPEAKNG_DATA_DIRECTORY",
+        resources_dir.to_string_lossy().to_string(),
+    );
+
+    // Read the variable back and log it to the console.
+    match env::var("PIPER_ESPEAKNG_DATA_DIRECTORY") {
+        Ok(val) => println!("PIPER_ESPEAKNG_DATA_DIRECTORY is set to: {}", val),
+        Err(e) => println!("Error reading env variable: {}", e),
+    }
+    // return the environment variable
+
+    // Ok::<String, String>(env::var("PIPER_ESPEAKNG_DATA_DIRECTORY").unwrap())
+
+    println!("Synthesizing and playing text: {}", text);
+    let text = text.to_string();
+    // thread::spawn(move || {
+    println!("Thread Synthesizing and playing text: {}", text);
     let mut app_state = APP_STATE.lock().unwrap();
     // if the synth is None, then we need to initialize it
     if app_state.synth.is_none() {
         // get the resources folder
         let resources_dir = get_resources_dir(handle);
         let config_path = Path::new(&resources_dir).join("model.onnx.json");
-        let model = piper_rs::from_config_path(&config_path).map_err(|e| e.to_string())?;
+        let model = piper_rs::from_config_path(&config_path)
+            .map_err(|e| e.to_string())
+            .unwrap();
         model.set_speaker(50);
-        let synth = PiperSpeechSynthesizer::new(model).map_err(|e| e.to_string())?;
+        let synth = PiperSpeechSynthesizer::new(model)
+            .map_err(|e| e.to_string())
+            .unwrap();
         app_state.synth = Some(synth);
     }
-    let id = Uuid::new_v4();
-    // generate a new temp file name. Should be a {{uuid}}.wav
-    let temp_file_name = format!("{}.wav", id.to_string());
-    let temp_file_path = Path::new(&get_temp_dir()).join(temp_file_name.clone());
 
     // synthesize the text to speech
-    app_state
-        .synth
-        .as_ref()
-        .unwrap()
-        .synthesize_to_file(Path::new(&temp_file_path), text.to_string(), None)
-        .map_err(|e| e.to_string())?;
-
-    Ok(temp_file_name)
-}
-
-#[tauri::command]
-fn synth_and_play_text(text: &str, handle: tauri::AppHandle) -> Result<String, String> {
-    let text = text.to_string();
-    thread::spawn(move || {
-        let mut app_state = APP_STATE.lock().unwrap();
-        // if the synth is None, then we need to initialize it
-        if app_state.synth.is_none() {
-            // get the resources folder
-            let resources_dir = get_resources_dir(handle);
-            let config_path = Path::new(&resources_dir).join("model.onnx.json");
-            let model = piper_rs::from_config_path(&config_path)
-                .map_err(|e| e.to_string())
-                .unwrap();
-            model.set_speaker(50);
-            let synth = PiperSpeechSynthesizer::new(model)
-                .map_err(|e| e.to_string())
-                .unwrap();
-            app_state.synth = Some(synth);
-        }
-
-        // synthesize the text to speech
-        let mut samples: Vec<f32> = Vec::new();
-        let audio = app_state
+    let mut samples: Vec<f32> = Vec::new();
+    let audio =
+        match app_state
             .synth
             .as_ref()
             .unwrap()
             .synthesize_parallel(text, None)
-            .unwrap();
-        for result in audio {
-            samples.append(&mut result.unwrap().into_vec());
-        }
+        {
+            Ok(audio) => audio,
+            Err(e) => return Ok(format!(
+                "Error synthesizing speech, Is this application in the applications folder?: {}",
+                e
+            )),
+        };
+    for result in audio {
+        samples.append(&mut result.unwrap().into_vec());
+    }
 
-        // play the audio
-        let (_stream, handle) = rodio::OutputStream::try_default().unwrap();
-        let sink = rodio::Sink::try_new(&handle).unwrap();
-        let buf = SamplesBuffer::new(1, 22050, samples);
-        sink.append(buf);
-        sink.sleep_until_end();
+    // play the audio
+    let (_stream, handle) = rodio::OutputStream::try_default().unwrap();
+    let sink = rodio::Sink::try_new(&handle).unwrap();
+    let buf = SamplesBuffer::new(1, 22050, samples);
+    sink.append(buf);
+    sink.sleep_until_end();
+    println!("Thread finished synthesizing and playing");
+    // });
+
+    Ok("Finished TTS!".to_string())
+}
+
+#[tauri::command]
+async fn test_command(handle: tauri::AppHandle) -> Result<String, String> {
+    let config = load_config(&handle);
+    chat::test_function(&config.twitch_username).await.map_err(|e| e.to_string())?;
+    Ok("Chat connection successful".to_string())
+}
+
+#[tauri::command]
+fn start_twitch_chat_reader(handle: tauri::AppHandle) -> Result<String, String> {
+    let config = load_config(&handle);
+
+    // Create a channel for communication
+    let (tts_tx, tts_rx): (Sender<String>, Receiver<String>) = channel(); // Twitch -> TTS
+    let tts_tx_clone = tts_tx.clone();
+    let kill_flag = Arc::new(AtomicBool::new(false)); // NEW
+    let kill_flag_clone = kill_flag.clone();
+    
+    {
+        // set the tts_tx and tts_rx in the app state
+        let mut app_state = APP_STATE.lock().unwrap();
+        app_state.tts_tx = Some(tts_tx);
+        app_state.tts_rx = Some(tts_rx);
+        app_state.kill_flag = Some(kill_flag); // store for later kill
+    };
+
+    
+    let channel_name = config.twitch_username.clone();
+    thread::spawn(move || {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            if let Err(e) = chat::start_twitch_chat_reader(&channel_name, &tts_tx_clone, &kill_flag_clone).await {
+                eprintln!("Error in Twitch chat reader: {}", e);
+            }
+        });
     });
 
-    Ok("Started processing".to_string())
+    // create tts->audio channel of Vec<f32>
+    let (audio_tx, audio_rx): (Sender<Vec<f32>>, Receiver<Vec<f32>>) = channel(); // TTS -> Audio
+    let audio_tx_clone = audio_tx.clone();
+    {
+        let mut app_state = APP_STATE.lock().unwrap();
+        app_state.audio_tx = Some(audio_tx);
+        app_state.audio_rx = Some(audio_rx);
+    };
+
+    // get vars for tts->audio thread
+    let resources_dir = get_resources_dir(handle);
+    let (tts_rx, audio_tx, kill_flag) = {
+        let mut app_state = APP_STATE.lock().unwrap();
+        (
+            app_state.tts_rx.take().unwrap(), 
+            app_state.audio_tx.as_ref().unwrap().clone(),
+            app_state.kill_flag.as_ref().unwrap().clone()
+        )
+    };
+
+    // create tts->audio thread
+    thread::spawn(move || {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            tts::synth_loop(tts_rx, &audio_tx, &kill_flag, &resources_dir).await.unwrap();
+        });
+    });
+
+    // get vars for audio->play thread
+    let (audio_rx, kill_flag) = {
+        let mut app_state = APP_STATE.lock().unwrap();
+        (
+            app_state.audio_rx.take().unwrap(), 
+            app_state.kill_flag.as_ref().unwrap().clone()
+        )
+    };
+
+    // create audio->play thread
+    thread::spawn(move || {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            tts::audio_loop(audio_rx, &kill_flag).await.unwrap();
+        });
+    });
+
+    
+    Ok("Twitch chat reader started".to_string())
+}
+
+#[tauri::command]
+fn kill_twitch_chat_reader() -> Result<String, String> {
+    println!("Killing twitch chat reader");
+    println!("Attempting to acquire APP_STATE lock");
+    let mut app_state = match APP_STATE.lock() {
+        Ok(state) => {
+            println!("Successfully acquired APP_STATE lock");
+            state
+        },
+        Err(e) => {
+            println!("Error acquiring APP_STATE lock: {}", e);
+            return Err("Failed to acquire application state lock".to_string());
+        }
+    };
+    println!("got here");
+    if let Some(flag) = &app_state.kill_flag {
+        println!("Setting kill flag");
+        flag.store(true, Ordering::SeqCst); // Signal the thread to stop
+        Ok("Twitch chat reader kill signal sent.".to_string())
+    } else {
+        println!("No chat reader running.");
+        Err("No chat reader running.".to_string())
+    }
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -120,7 +307,15 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_fs::init())
-        .invoke_handler(tauri::generate_handler![synth_text, synth_and_play_text])
+        .invoke_handler(tauri::generate_handler![
+            synth_and_play_text,
+            test_command,
+            set_twitch_username,
+            get_twitch_username,
+            print_config,
+            start_twitch_chat_reader,
+            kill_twitch_chat_reader,
+        ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
