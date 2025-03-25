@@ -8,12 +8,34 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, Sender};
 use std::sync::Arc;
+use tauri::AppHandle;
+
+/// Gets all available speakers from the Piper model
+/// Returns a sorted Vec of (id, name) tuples
+pub fn get_available_speakers(resources_dir: &PathBuf) -> Result<Vec<(i32, String)>, String> {
+    // get the config path from resources directory
+    let config_path = Path::new(&resources_dir).join("model.onnx.json");
+
+    let model = piper_rs::from_config_path(&config_path)
+        .map_err(|e| format!("Failed to load model: {}", e))?;
+
+    let speakers = model
+        .get_speakers()
+        .map_err(|e| format!("Failed to get speakers: {}", e))?
+        .ok_or_else(|| String::from("No speakers found in model"))?
+        .into_iter()
+        .map(|(id, name)| ((*id as i32), name.clone()))
+        .collect::<Vec<_>>();
+
+    Ok(speakers)
+}
 
 pub async fn synth_loop(
     tts_rx: Receiver<String>,
     audio_tx: &Sender<Vec<f32>>,
     kill_flag: &Arc<AtomicBool>,
     resources_dir: &PathBuf,
+    app_handle: AppHandle,
 ) -> Result<()> {
     println!("Starting synth loop");
     // set PIPER_ESPEAKNG_DATA_DIRECTORY to the resources folder
@@ -30,7 +52,11 @@ pub async fn synth_loop(
     let model = piper_rs::from_config_path(&config_path)
         .map_err(|e| e.to_string())
         .unwrap();
-    model.set_speaker(50);
+
+    // Get selected speaker from config
+    let config = crate::load_config(&app_handle);
+    model.set_speaker(config.selected_speaker_id as i64);
+
     let synth = PiperSpeechSynthesizer::new(model)
         .map_err(|e| e.to_string())
         .unwrap();

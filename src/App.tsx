@@ -5,11 +5,55 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+
+interface Speaker {
+  id: number;
+  name: string;
+}
 
 function App() {
   const [greetMsg, setGreetMsg] = useState("");
   const [textToSynthesize, setTextToSynthesize] = useState("");
   const [connectedToTwitch, setConnectedToTwitch] = useState(false);
+  const [speakers, setSpeakers] = useState<Speaker[]>([]);
+  const [selectedSpeakerId, setSelectedSpeakerId] = useState<number | null>(50);
+
+  // Function to fetch available speakers
+  async function fetchSpeakers() {
+    try {
+      const speakerList = (await invoke("get_available_speakers")) as [
+        number,
+        string
+      ][];
+      const formattedSpeakers = speakerList.map(([id, name]) => ({ id, name }));
+      // limit to the first 50
+      setSpeakers(formattedSpeakers.slice(0, 50));
+    } catch (error) {
+      console.error("Failed to fetch speakers:", error);
+      setGreetMsg("Error fetching available voices");
+    }
+  }
+
+  // Function to set selected speaker
+  async function handleSpeakerChange(speakerId: string) {
+    try {
+      setGreetMsg("Updating voice...");
+      const id = parseInt(speakerId);
+      await invoke("set_selected_speaker", { speakerId: id });
+      setSelectedSpeakerId(id);
+      setGreetMsg("Voice updated successfully");
+    } catch (error) {
+      console.error("Failed to set speaker:", error);
+      setGreetMsg("Error setting voice");
+    }
+  }
 
   async function startTwitchChatReader() {
     const message = await invoke("start_twitch_chat_reader");
@@ -42,11 +86,11 @@ function App() {
 
   // Effect to get Twitch username on component mount
   const [twitchUsername, setTwitchUsername] = useState("Twitch Username Here");
-  
+
   // Function to fetch the Twitch username from the backend
   async function fetchTwitchUsername() {
     try {
-      const username = await invoke("get_twitch_username") as string;
+      const username = (await invoke("get_twitch_username")) as string;
       setTwitchUsername(username);
       if (username) {
         setGreetMsg(`Current set Twitch username: ${username}`);
@@ -58,10 +102,11 @@ function App() {
       setGreetMsg("Error fetching Twitch username");
     }
   }
-  
-  // Call the function when component mounts
+
+  // Call the functions when component mounts
   useEffect(() => {
     fetchTwitchUsername();
+    fetchSpeakers();
   }, []);
 
   return (
@@ -77,10 +122,27 @@ function App() {
             className="space-y-4"
             onSubmit={(e) => {
               e.preventDefault();
-              //synthesizeSpeech();
               synthesizeAndPlayAudio();
             }}
           >
+            <div className="space-y-2">
+              <Label htmlFor="voice-select">Select Voice</Label>
+              <Select
+                onValueChange={handleSpeakerChange}
+                value={selectedSpeakerId?.toString()}
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder="Select a voice" />
+                </SelectTrigger>
+                <SelectContent>
+                  {speakers.map((speaker) => (
+                    <SelectItem key={speaker.id} value={speaker.id.toString()}>
+                      {speaker.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
             <div className="space-y-2">
               <Label htmlFor="text-input">Enter text to synthesize</Label>
               <Input

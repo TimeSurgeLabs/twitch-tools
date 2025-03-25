@@ -1,6 +1,7 @@
 ---
 description: React best practices and patterns for modern web applications
-globs: **/*.tsx, **/*.jsx, components/**/*
+globs: **/*.tsx, **/*.jsx, components/**/*,**/*.jsx
+alwaysApply: false
 ---
 
 # React Best Practices

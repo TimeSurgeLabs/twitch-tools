@@ -16,12 +16,13 @@ use serde::{Deserialize, Serialize};
 use serde_json;
 use std::fs;
 use std::path::PathBuf;
-use std::sync::mpsc::{channel, Sender, Receiver};
+use std::sync::mpsc::{channel, Receiver, Sender};
 use std::thread;
 
 #[derive(Serialize, Deserialize, Default, Debug)]
 struct Config {
     twitch_username: String,
+    selected_speaker_id: i32,
 }
 
 // Load config function using Tauri's config system
@@ -107,7 +108,6 @@ lazy_static! {
     });
 }
 
-
 fn get_resources_dir(handle: tauri::AppHandle) -> PathBuf {
     let path = handle
         .path()
@@ -137,24 +137,25 @@ fn synth_and_play_text(text: &str, handle: tauri::AppHandle) -> Result<String, S
         Ok(val) => println!("PIPER_ESPEAKNG_DATA_DIRECTORY is set to: {}", val),
         Err(e) => println!("Error reading env variable: {}", e),
     }
-    // return the environment variable
-
-    // Ok::<String, String>(env::var("PIPER_ESPEAKNG_DATA_DIRECTORY").unwrap())
 
     println!("Synthesizing and playing text: {}", text);
     let text = text.to_string();
-    // thread::spawn(move || {
     println!("Thread Synthesizing and playing text: {}", text);
     let mut app_state = APP_STATE.lock().unwrap();
     // if the synth is None, then we need to initialize it
     if app_state.synth.is_none() {
         // get the resources folder
-        let resources_dir = get_resources_dir(handle);
+        let resources_dir = get_resources_dir(handle.clone());
         let config_path = Path::new(&resources_dir).join("model.onnx.json");
         let model = piper_rs::from_config_path(&config_path)
             .map_err(|e| e.to_string())
             .unwrap();
-        model.set_speaker(50);
+
+        // Get selected speaker from config
+        let config = load_config(&handle);
+        // set the speaker to the selected speaker
+        model.set_speaker(config.selected_speaker_id as i64);
+
         let synth = PiperSpeechSynthesizer::new(model)
             .map_err(|e| e.to_string())
             .unwrap();
@@ -163,19 +164,20 @@ fn synth_and_play_text(text: &str, handle: tauri::AppHandle) -> Result<String, S
 
     // synthesize the text to speech
     let mut samples: Vec<f32> = Vec::new();
-    let audio =
-        match app_state
-            .synth
-            .as_ref()
-            .unwrap()
-            .synthesize_parallel(text, None)
-        {
-            Ok(audio) => audio,
-            Err(e) => return Ok(format!(
+    let audio = match app_state
+        .synth
+        .as_ref()
+        .unwrap()
+        .synthesize_parallel(text, None)
+    {
+        Ok(audio) => audio,
+        Err(e) => {
+            return Ok(format!(
                 "Error synthesizing speech, Is this application in the applications folder?: {}",
                 e
-            )),
-        };
+            ))
+        }
+    };
     for result in audio {
         samples.append(&mut result.unwrap().into_vec());
     }
@@ -187,7 +189,6 @@ fn synth_and_play_text(text: &str, handle: tauri::AppHandle) -> Result<String, S
     sink.append(buf);
     sink.sleep_until_end();
     println!("Thread finished synthesizing and playing");
-    // });
 
     Ok("Finished TTS!".to_string())
 }
@@ -195,7 +196,9 @@ fn synth_and_play_text(text: &str, handle: tauri::AppHandle) -> Result<String, S
 #[tauri::command]
 async fn test_command(handle: tauri::AppHandle) -> Result<String, String> {
     let config = load_config(&handle);
-    chat::test_function(&config.twitch_username).await.map_err(|e| e.to_string())?;
+    chat::test_function(&config.twitch_username)
+        .await
+        .map_err(|e| e.to_string())?;
     Ok("Chat connection successful".to_string())
 }
 
@@ -208,21 +211,26 @@ fn start_twitch_chat_reader(handle: tauri::AppHandle) -> Result<String, String> 
     let tts_tx_clone = tts_tx.clone();
     let kill_flag = Arc::new(AtomicBool::new(false)); // NEW
     let kill_flag_clone = kill_flag.clone();
-    
+
     {
         // set the tts_tx and tts_rx in the app state
         let mut app_state = APP_STATE.lock().unwrap();
+        // Clear any existing kill flag and set the new one
+        if let Some(existing_flag) = &app_state.kill_flag {
+            existing_flag.store(true, Ordering::SeqCst); // Kill any existing reader
+        }
         app_state.tts_tx = Some(tts_tx);
         app_state.tts_rx = Some(tts_rx);
         app_state.kill_flag = Some(kill_flag); // store for later kill
     };
 
-    
     let channel_name = config.twitch_username.clone();
     thread::spawn(move || {
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async {
-            if let Err(e) = chat::start_twitch_chat_reader(&channel_name, &tts_tx_clone, &kill_flag_clone).await {
+            if let Err(e) =
+                chat::start_twitch_chat_reader(&channel_name, &tts_tx_clone, &kill_flag_clone).await
+            {
                 eprintln!("Error in Twitch chat reader: {}", e);
             }
         });
@@ -230,7 +238,6 @@ fn start_twitch_chat_reader(handle: tauri::AppHandle) -> Result<String, String> 
 
     // create tts->audio channel of Vec<f32>
     let (audio_tx, audio_rx): (Sender<Vec<f32>>, Receiver<Vec<f32>>) = channel(); // TTS -> Audio
-    let audio_tx_clone = audio_tx.clone();
     {
         let mut app_state = APP_STATE.lock().unwrap();
         app_state.audio_tx = Some(audio_tx);
@@ -238,13 +245,14 @@ fn start_twitch_chat_reader(handle: tauri::AppHandle) -> Result<String, String> 
     };
 
     // get vars for tts->audio thread
-    let resources_dir = get_resources_dir(handle);
+    let resources_dir = get_resources_dir(handle.clone());
+    let handle_clone = handle.clone();
     let (tts_rx, audio_tx, kill_flag) = {
         let mut app_state = APP_STATE.lock().unwrap();
         (
-            app_state.tts_rx.take().unwrap(), 
+            app_state.tts_rx.take().unwrap(),
             app_state.audio_tx.as_ref().unwrap().clone(),
-            app_state.kill_flag.as_ref().unwrap().clone()
+            app_state.kill_flag.as_ref().unwrap().clone(),
         )
     };
 
@@ -252,7 +260,9 @@ fn start_twitch_chat_reader(handle: tauri::AppHandle) -> Result<String, String> 
     thread::spawn(move || {
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async {
-            tts::synth_loop(tts_rx, &audio_tx, &kill_flag, &resources_dir).await.unwrap();
+            tts::synth_loop(tts_rx, &audio_tx, &kill_flag, &resources_dir, handle_clone)
+                .await
+                .unwrap();
         });
     });
 
@@ -260,8 +270,8 @@ fn start_twitch_chat_reader(handle: tauri::AppHandle) -> Result<String, String> 
     let (audio_rx, kill_flag) = {
         let mut app_state = APP_STATE.lock().unwrap();
         (
-            app_state.audio_rx.take().unwrap(), 
-            app_state.kill_flag.as_ref().unwrap().clone()
+            app_state.audio_rx.take().unwrap(),
+            app_state.kill_flag.as_ref().unwrap().clone(),
         )
     };
 
@@ -273,7 +283,6 @@ fn start_twitch_chat_reader(handle: tauri::AppHandle) -> Result<String, String> 
         });
     });
 
-    
     Ok("Twitch chat reader started".to_string())
 }
 
@@ -281,11 +290,11 @@ fn start_twitch_chat_reader(handle: tauri::AppHandle) -> Result<String, String> 
 fn kill_twitch_chat_reader() -> Result<String, String> {
     println!("Killing twitch chat reader");
     println!("Attempting to acquire APP_STATE lock");
-    let mut app_state = match APP_STATE.lock() {
+    let app_state = match APP_STATE.lock() {
         Ok(state) => {
             println!("Successfully acquired APP_STATE lock");
             state
-        },
+        }
         Err(e) => {
             println!("Error acquiring APP_STATE lock: {}", e);
             return Err("Failed to acquire application state lock".to_string());
@@ -302,6 +311,34 @@ fn kill_twitch_chat_reader() -> Result<String, String> {
     }
 }
 
+#[tauri::command]
+fn get_available_speakers(handle: tauri::AppHandle) -> Result<Vec<(i32, String)>, String> {
+    let resources_dir = get_resources_dir(handle);
+    let speakers = tts::get_available_speakers(&resources_dir).unwrap();
+    Ok(speakers)
+}
+
+#[tauri::command]
+async fn set_selected_speaker(app: tauri::AppHandle, speaker_id: i32) -> Result<String, String> {
+    let mut config = load_config(&app);
+    config.selected_speaker_id = speaker_id;
+    save_config(&app, &config).map_err(|e| e.to_string())?;
+
+    // Reinitialize the synthesizer with the new speaker in a background thread
+    let resources_dir = get_resources_dir(app.clone());
+    let config_path = Path::new(&resources_dir).join("model.onnx.json");
+    let model = piper_rs::from_config_path(&config_path).map_err(|e| e.to_string())?;
+    model.set_speaker(speaker_id as i64);
+
+    let new_synth = PiperSpeechSynthesizer::new(model).map_err(|e| e.to_string())?;
+
+    // Only lock APP_STATE for the brief moment we need to update the synthesizer
+    let mut app_state = APP_STATE.lock().unwrap();
+    app_state.synth = Some(new_synth);
+
+    Ok("Speaker updated successfully".to_string())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -315,6 +352,8 @@ pub fn run() {
             print_config,
             start_twitch_chat_reader,
             kill_twitch_chat_reader,
+            get_available_speakers,
+            set_selected_speaker,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -1,11 +1,11 @@
 use anyhow::Result;
 use lazy_static::lazy_static;
 use regex::Regex;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::Sender;
+use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::TcpStream;
-use std::sync::mpsc::Sender;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
 
 const SERVER: &str = "irc.chat.twitch.tv";
 const PORT: u16 = 6667;
@@ -80,10 +80,7 @@ pub fn parse_message(message: &str) -> Option<ChatMessage> {
     }
 }
 
-
-
 pub async fn test_function(channel: &str) -> Result<()> {
-    // let channel = "kylevasulka"; 
     let stream = connect_to_twitch_chat(channel, None).await?;
     let mut reader = BufReader::new(stream);
     let mut line = String::new();
@@ -98,8 +95,15 @@ pub async fn test_function(channel: &str) -> Result<()> {
                 break;
             }
             Ok(_) => {
-                // Print raw message for debugging
-                // println!("Raw message: {}", line.trim());
+                // Handle PING messages to keep the connection alive
+                if line.starts_with("PING") {
+                    reader
+                        .get_mut()
+                        .write_all(b"PONG :tmi.twitch.tv\r\n")
+                        .await?;
+                    reader.get_mut().flush().await?;
+                    continue;
+                }
 
                 if let Some(message) = parse_message(&line) {
                     println!("{}: {}", message.username, message.content);
@@ -115,8 +119,11 @@ pub async fn test_function(channel: &str) -> Result<()> {
     Ok(())
 }
 
-pub async fn start_twitch_chat_reader(channel: &str, tts_tx: &Sender<String>, kill_flag: &Arc<AtomicBool>) -> Result<()> {
-    // let channel = "kylevasulka"; 
+pub async fn start_twitch_chat_reader(
+    channel: &str,
+    tts_tx: &Sender<String>,
+    kill_flag: &Arc<AtomicBool>,
+) -> Result<()> {
     let stream = connect_to_twitch_chat(channel, None).await?;
     let mut reader = BufReader::new(stream);
     let mut line = String::new();
@@ -135,8 +142,14 @@ pub async fn start_twitch_chat_reader(channel: &str, tts_tx: &Sender<String>, ki
                 break;
             }
             Ok(_) => {
-                // Print raw message for debugging
-                // println!("Raw message: {}", line.trim());
+                // Handle PING messages to keep the connection alive
+                if line.starts_with("PING") {
+                    reader.get_mut().write_all(b"PONG\r\n").await?;
+                    reader.get_mut().flush().await?;
+                    println!("PONG sent");
+                    continue;
+                }
+
                 if kill_flag.load(Ordering::SeqCst) {
                     println!("Kill signal received, stopping twitch chat reader...");
                     break;
@@ -144,8 +157,11 @@ pub async fn start_twitch_chat_reader(channel: &str, tts_tx: &Sender<String>, ki
 
                 if let Some(message) = parse_message(&line) {
                     println!("{}: {}", message.username, message.content);
-                    match tts_tx.send(format!("user {} said {}", message.username, message.content)) {
-                        Ok(_) => {},
+                    match tts_tx.send(format!(
+                        "user {} said {}",
+                        message.username, message.content
+                    )) {
+                        Ok(_) => {}
                         Err(_) => {
                             println!("Invalid tts_tx, another twitch_chat_reader is likely running, killing self");
                             break;
@@ -162,4 +178,3 @@ pub async fn start_twitch_chat_reader(channel: &str, tts_tx: &Sender<String>, ki
 
     Ok(())
 }
-
